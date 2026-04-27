@@ -1,0 +1,14 @@
+{
+  "name": "neural-stack-monorepo",
+  "version": "1.0.0",
+  "description": "Cyber Fairness Console Monorepo",
+  "scripts": {
+    "install:all": "npm install && cd client && npm install",
+    "dev:server": "cd server && uvicorn main:app --reload --port 8000",
+    "dev:client": "cd client && npm run dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
