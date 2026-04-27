@@ -14,4 +14,4 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"status": "activ"}
+    return {"status": "active"}
