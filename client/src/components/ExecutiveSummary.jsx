@@ -53,13 +53,64 @@ function SummaryContent({ summary, redFlags }) {
     throw new Error('Empty summary from LLM.')
   }
 
-  return (
-    <div className="animate-in fade-in slide-in-from-bottom-2 space-y-6 duration-700">
-      <div className="relative">
-        <div className="absolute -left-4 top-0 h-full w-1 bg-cyan-500/30 rounded-full" />
-        <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">
-          {summary}
+  // Simple parser to turn LLM markdown-ish text into styled JSX
+  const formatText = (text) => {
+    return text.split('\n').map((line, i) => {
+      const trimmed = line.trim();
+      if (!trimmed) return <div key={i} className="h-2" />;
+
+      // Match "1. **Title**" or "### Title" patterns
+      const headingMatch = trimmed.match(/^(\d+\.|###)\s*\*\*(.*)\*\*|^(\d+\.|###)\s*(.*)/);
+      if (headingMatch) {
+        const title = headingMatch[2] || headingMatch[4];
+        return (
+          <h4 key={i} className="mt-4 mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.15em] text-cyan-400">
+            <span className="h-1 w-1 bg-cyan-400" />
+            {title}
+          </h4>
+        );
+      }
+
+      // Match bullet points
+      if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        const content = trimmed.replace(/^[-*]\s*/, '');
+        return (
+          <div key={i} className="ml-2 mb-1 flex items-start gap-2 text-sm text-slate-300">
+            <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-500" />
+            <span>{parseBoldText(content)}</span>
+          </div>
+        );
+      }
+
+      return (
+        <p key={i} className="mb-2 text-sm leading-relaxed text-slate-300">
+          {parseBoldText(trimmed)}
         </p>
+      );
+    });
+  };
+
+  const parseBoldText = (text) => {
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={i} className="font-semibold text-cyan-200">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return part;
+    });
+  };
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-2 space-y-4 duration-700">
+      <div className="relative rounded-xl border border-slate-800 bg-slate-900/30 p-5 backdrop-blur-sm">
+        <div className="absolute -left-[1px] top-4 h-8 w-[2px] bg-cyan-400" />
+        <div className="summary-body overflow-hidden">
+          {formatText(summary)}
+        </div>
       </div>
 
       {redFlags && redFlags.length > 0 && (
@@ -74,8 +125,8 @@ function SummaryContent({ summary, redFlags }) {
                 key={`${idx}-${flag}`} 
                 className="group flex items-start gap-3 rounded-lg border border-rose-500/10 bg-slate-900/40 p-3 transition-all hover:border-rose-500/30 hover:bg-rose-500/5"
               >
-                <div className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]" />
-                <span className="text-sm text-slate-300 group-hover:text-slate-100">{flag}</span>
+                <div className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]" />
+                <span className="text-sm text-slate-300 group-hover:text-slate-100 leading-snug">{flag}</span>
               </li>
             ))}
           </ul>
