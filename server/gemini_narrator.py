@@ -36,6 +36,9 @@ def _get_generate_content_models(preferred_model: str) -> Tuple[List[str], Set[s
         model_name = getattr(model, "name", "")
         if model_name:
             normalized_name = _normalize_model_name(model_name)
+            # Exclude TTS and audio-only models
+            if "tts" in normalized_name.lower() or "audio" in normalized_name.lower():
+                continue
             if normalized_name.startswith("gemini"):
                 generate_content_models.add(normalized_name)
 
