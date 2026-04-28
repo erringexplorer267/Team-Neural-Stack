@@ -20,6 +20,8 @@ def _normalize_model_name(model_name: str) -> str:
 def _get_generate_content_models(preferred_model: str) -> Tuple[List[str], Set[str]]:
     preferred_candidates = [
         preferred_model,
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
         "gemini-1.5-flash",
@@ -46,7 +48,7 @@ def _get_generate_content_models(preferred_model: str) -> Tuple[List[str], Set[s
     seen: Set[str] = set()
 
     # Keep selection strict to approved text models only.
-    # This avoids accidentally falling through to preview/2.5 variants.
+    # This avoids accidentally falling through to preview/audio-only variants.
     for candidate in preferred_candidates:
         normalized = _normalize_model_name(candidate)
         if normalized in generate_content_models and normalized not in seen:
@@ -116,19 +118,8 @@ def generate_audit_report(metrics_json: Dict[str, Any]) -> Dict[str, Any]:
 
     preferred_model_env = os.getenv("GEMINI_MODEL")
     model_name = preferred_model_env or "gemini-2.0-flash"
-    normalized_preferred = _normalize_model_name(model_name)
-    if preferred_model_env and not normalized_preferred.startswith("gemini"):
-        raise ValueError(
-            f"Invalid GEMINI_MODEL '{normalized_preferred}'. "
-            "Use a Gemini model name such as 'gemini-2.0-flash', or unset GEMINI_MODEL for auto-selection."
-        )
 
     candidate_models, available_models = _get_generate_content_models(model_name)
-    if preferred_model_env and normalized_preferred not in available_models:
-        raise ValueError(
-            f"Configured GEMINI_MODEL '{normalized_preferred}' is not available for this API key/project. "
-            "Unset GEMINI_MODEL to auto-select an available Gemini model."
-        )
     if not candidate_models:
         raise ValueError("No Gemini models with generateContent support are available for this API key/project.")
 
