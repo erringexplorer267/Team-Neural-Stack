@@ -1,335 +1,128 @@
+import os
+import uuid
+import io
+import re
+import json
+import pandas as pd
+from typing import Dict, Any, List
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Any
-import json
-import re
-import pandas as pd
-import io
-import uuid
-from bias_engine import analyze_dataset_comprehensive, compute_fairness_metrics
-from langchain_utils import generate_bias_narrative, analyze_hidden_correlations
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from pydantic import BaseModel
-from typing import List
+# Import your local modules
+from bias_engine import analyze_dataset_comprehensive, compute_fairness_metrics
+from langchain_utils import generate_bias_narrative, analyze_hidden_correlations
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 app = FastAPI(title="Neural Stack API")
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost",
-    "http://127.0.0.1",
-]
-
+# Updated CORS for production/hackathon flexibility
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"], # Allows your frontend to connect from anywhere (ideal for demos)
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
-
-@app.get("/")
-async def read_root():
-    return {"message": "Neural Stack API"}
-
-
-@app.options("/")
-async def options_root():
-    return {}
-
-
-@app.options("/upload")
-async def options_upload():
-    return {}
-
-
-@app.options("/analyze")
-async def options_analyze():
-    return {}
-
-
-@app.options("/narrative")
-async def options_narrative():
-    return {}
-
-
-@app.options("/agent-reasoning")
-async def options_agent_reasoning():
-    return {}
-
-
-@app.options("/simulate-mitigation")
-async def options_simulate_mitigation():
-    return {}
-
-
-@app.options("/report")
-async def options_report():
-    return {}
-
-
-# Simple in-memory store for uploaded dataframes (session-less dev)
+# --- IN-MEMORY STORAGE ---
 DATAFRAMES: Dict[str, pd.DataFrame] = {}
 
-
-@app.post("/upload")
-async def upload_csv(file: UploadFile = File(...)):
-    if not (file.filename.endswith(".csv") or file.content_type in ("text/csv", "application/vnd.ms-excel")):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported")
-
-    contents = await file.read()
-    try:
-        df = pd.read_csv(io.BytesIO(contents))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {exc}")
-
-    # Build response metadata
-    columns = list(df.columns)
-    dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
-
-    keywords = ["race", "gender", "age", "zip", "ethnicity"]
-    potential_sensitive = [col for col in columns if any(k in col.lower() for k in keywords)]
-
-    # store dataframe in global dict with a generated id
-    data_id = str(uuid.uuid4())
-    DATAFRAMES[data_id] = df
-
-    return {
-        "id": data_id,
-        "columns": columns,
-        "dtypes": dtypes,
-        "potential_sensitive_attributes": potential_sensitive,
-    }
-
-
-@app.post("/upload-manual")
-async def upload_manual(payload: dict):
-    data = payload.get("data")
-    if not data or not isinstance(data, list):
-        raise HTTPException(status_code=400, detail="Data must be a list of objects")
-
-    try:
-        df = pd.DataFrame(data)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to create DataFrame: {exc}")
-
-    if df.empty:
-        raise HTTPException(status_code=400, detail="Data is empty")
-
-    # Build response metadata
-    columns = list(df.columns)
-    dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
-
-    keywords = ["race", "gender", "age", "zip", "ethnicity"]
-    potential_sensitive = [col for col in columns if any(k in col.lower() for k in keywords)]
-
-    # store dataframe in global dict with a generated id
-    data_id = str(uuid.uuid4())
-    DATAFRAMES[data_id] = df
-
-    return {
-        "id": data_id,
-        "columns": columns,
-        "dtypes": dtypes,
-        "potential_sensitive_attributes": potential_sensitive,
-    }
-
+# --- HELPER FUNCTIONS ---
 
 def simulate_reweighting_improvements(metrics: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Build hypothetical (not trained) fairness improvements for a re-weighting simulation.
-    """
     improved = {
         "privileged_group": metrics["privileged_group"],
         "selection_rates": dict(metrics["selection_rates"]),
         "metrics": {},
     }
-
     metric_items = sorted(metrics.get("metrics", {}).items(), key=lambda x: x[0])
     for idx, (group, values) in enumerate(metric_items):
-        # Deterministic factor in [0.20, 0.30] for stable UI previews.
         improvement_factor = 0.20 + ((idx % 3) * 0.05)
         di = values.get("disparate_impact")
         spd = values.get("statistical_parity_difference")
-
-        improved_di = None
-        if di is not None:
-            improved_di = float(di) + ((1.0 - float(di)) * improvement_factor)
-
-        improved_spd = None
-        if spd is not None:
-            improved_spd = float(spd) * (1.0 - improvement_factor)
-
+        improved_di = float(di) + ((1.0 - float(di)) * improvement_factor) if di is not None else None
+        improved_spd = float(spd) * (1.0 - improvement_factor) if spd is not None else None
         improved["metrics"][group] = {
             "disparate_impact": improved_di,
             "statistical_parity_difference": improved_spd,
             "improvement_factor": round(improvement_factor, 2),
         }
-
     return improved
 
-
-def format_audit_report_markdown(
-    title: str,
-    narrative: str,
-    charts: Dict[str, Any],
-    executive_summary: str = "",
-) -> str:
+def format_audit_report_markdown(title: str, narrative: str, charts: Dict[str, Any], executive_summary: str = "") -> str:
     chart_json = json.dumps(charts or {}, indent=2)
-
-    sections = [
-        f"# {title}",
-        "",
-        "## Executive Summary",
-        executive_summary or "_Not provided_",
-        "",
-        "## AI Narrative",
-        narrative or "_Not provided_",
-        "",
-        "## Chart Data Snapshot",
-        "```json",
-        chart_json,
-        "```",
-        "",
-        "## Notes",
-        "- Generated by Neural Stack audit pipeline.",
-        "- This report includes chart data payload for reproducibility.",
-    ]
+    sections = [f"# {title}", "", "## Executive Summary", executive_summary or "_Not provided_", "", 
+                "## AI Narrative", narrative or "_Not provided_", "", "## Chart Data Snapshot", 
+                "```json", chart_json, "```", "", "## Notes", "- Generated by Neural Stack audit pipeline."]
     return "\n".join(sections)
-
 
 def extract_red_flags(summary: str) -> list[str]:
     lines = [line.strip() for line in summary.splitlines() if line.strip()]
     bullet_lines = []
     for line in lines:
         normalized = re.sub(r"^\s*[-*]\s*", "", line)
-        if normalized.lower().startswith(("risk", "warning", "red flag", "concern")):
+        if any(term in normalized.lower() for term in ("risk", "warning", "red flag", "bias", "disparity")):
             bullet_lines.append(normalized)
-        elif any(term in normalized.lower() for term in ("high", "severe", "bias", "disparity")):
-            bullet_lines.append(normalized)
-        if len(bullet_lines) >= 5:
-            break
-
-    if bullet_lines:
-        return bullet_lines
-
-    return ["No explicit red flags extracted from LLM response."]
-
+        if len(bullet_lines) >= 5: break
+    return bullet_lines if bullet_lines else ["Manual verification required: specific flags not parsed."]
 
 def build_fallback_agent_summary(dataset_stats: Dict[str, Any]) -> str:
-    row_count = dataset_stats.get("row_count", 0)
-    column_count = dataset_stats.get("column_count", 0)
-    sensitive_attribute = dataset_stats.get("sensitive_attribute", "selected attribute")
-    null_counts = dataset_stats.get("null_counts", {}) or {}
-    top_nulls = sorted(null_counts.items(), key=lambda item: item[1], reverse=True)[:3]
-    null_summary = ", ".join(f"{col}: {count}" for col, count in top_nulls if count > 0) or "no major null spikes"
+    return f"Fallback: Scanned {dataset_stats.get('row_count')} rows. LLM reasoning unavailable. Check high-correlation features for proxy risk."
 
-    return (
-        "1. Hidden correlations\n"
-        "- LLM summary was unavailable, so this is a deterministic fallback.\n"
-        f"- Dataset scanned: {row_count} rows across {column_count} columns.\n\n"
-        "2. Potential proxy variables\n"
-        f"- Review high-correlation features against '{sensitive_attribute}' for proxy risk.\n\n"
-        "3. Risk level\n"
-        "- Medium: manual verification required because automated reasoning was unavailable.\n\n"
-        "4. Recommended next checks\n"
-        f"- Inspect missingness patterns ({null_summary}).\n"
-        "- Re-run agent reasoning after verifying API key/model quota."
-    )
+# --- API ENDPOINTS ---
 
+@app.get("/")
+async def read_root():
+    return {"status": "online", "message": "Neural Stack API - Asia-South1 Deployment"}
+
+@app.post("/upload")
+async def upload_csv(file: UploadFile = File(...)):
+    if not (file.filename.endswith(".csv") or file.content_type in ("text/csv", "application/vnd.ms-excel")):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+    contents = await file.read()
+    try:
+        df = pd.read_csv(io.BytesIO(contents))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {exc}")
+    
+    data_id = str(uuid.uuid4())
+    DATAFRAMES[data_id] = df
+    keywords = ["race", "gender", "age", "zip", "ethnicity"]
+    return {
+        "id": data_id,
+        "columns": list(df.columns),
+        "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+        "potential_sensitive_attributes": [col for col in df.columns if any(k in col.lower() for k in keywords)],
+    }
 
 @app.post("/analyze")
 async def analyze(data: dict):
-    """Analyze stored dataframe for fairness metrics.
-
-    Expected JSON body: {"data_id": "<id>", "target_column": "yhat", "sensitive_column": "gender", "privileged_value": "male" (optional)}
-    """
-    data_id = data.get("data_id")
-    target_column = data.get("target_column")
-    sensitive_column = data.get("sensitive_column")
-    privileged_value = data.get("privileged_value")
-
-    if not data_id:
-        raise HTTPException(status_code=400, detail="data_id is required")
-    if not target_column:
-        raise HTTPException(status_code=400, detail="target_column is required")
-    if not sensitive_column:
-        raise HTTPException(status_code=400, detail="sensitive_column is required")
-
-    if data_id not in DATAFRAMES:
-        raise HTTPException(status_code=404, detail="data_id not found")
-
+    data_id, target, sensitive = data.get("data_id"), data.get("target_column"), data.get("sensitive_column")
+    if data_id not in DATAFRAMES: raise HTTPException(status_code=404, detail="Data not found")
     df = DATAFRAMES[data_id]
-
     try:
-        metrics = compute_fairness_metrics(df, target_column, sensitive_column, privileged_value)
-        comprehensive_analysis = analyze_dataset_comprehensive(df, sensitive_column, target_column, privileged_value)
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        metrics = compute_fairness_metrics(df, target, sensitive, data.get("privileged_value"))
+        comp = analyze_dataset_comprehensive(df, sensitive, target, data.get("privileged_value"))
+        return {"data_id": data_id, "analysis": metrics, "comprehensive_analysis": comp}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to analyze fairness metrics: {str(e)}")
-
-    return {"data_id": data_id, "analysis": metrics, "comprehensive_analysis": comprehensive_analysis}
-
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/narrative")
 async def generate_narrative(data: dict):
-    """Generate bias audit narrative from fairness metrics using GPT-4o.
-
-    Expected JSON body: {
-        "data_id": "<id>",
-        "target_column": "yhat",
-        "sensitive_column": "gender",
-        "privileged_value": "male" (optional)
-    }
-    """
     data_id = data.get("data_id")
-    target_column = data.get("target_column")
-    sensitive_column = data.get("sensitive_column")
-    privileged_value = data.get("privileged_value")
-
-    if not data_id:
-        raise HTTPException(status_code=400, detail="data_id is required")
-    if not target_column:
-        raise HTTPException(status_code=400, detail="target_column is required")
-    if not sensitive_column:
-        raise HTTPException(status_code=400, detail="sensitive_column is required")
-
-    if data_id not in DATAFRAMES:
-        raise HTTPException(status_code=404, detail="data_id not found")
-
+    if data_id not in DATAFRAMES: raise HTTPException(status_code=404, detail="Data not found")
     df = DATAFRAMES[data_id]
-
     try:
-        # Compute fairness metrics first
-        metrics = compute_fairness_metrics(df, target_column, sensitive_column, privileged_value)
-
-        # Generate narrative using LangChain + GPT-4o
-        available_columns = list(df.columns)
-        narrative = generate_bias_narrative(
-            metrics,
-            available_columns,
-            sensitive_column,
-        )
-
-        return {
-            "data_id": data_id,
-            "sensitive_attribute": sensitive_column,
-            "metrics": metrics,
-            "narrative": narrative,
-        }
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        metrics = compute_fairness_metrics(df, data.get("target_column"), data.get("sensitive_column"), data.get("privileged_value"))
+        narrative = generate_bias_narrative(metrics, list(df.columns), data.get("sensitive_column"))
+        return {"data_id": data_id, "narrative": narrative}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating narrative: {str(e)}")
-
+        raise HTTPException(status_code=500, detail=str(e))
 
 class AgentReasoningResponse(BaseModel):
     summary: str
@@ -338,158 +131,35 @@ class AgentReasoningResponse(BaseModel):
 
 @app.post("/agent-reasoning", response_model=AgentReasoningResponse)
 async def agent_reasoning(data: dict):
-    """
-    Simulate an agentic reasoning workflow for terminal-style UI.
-
-    Expected JSON body: {"data_id": "<id>", "sensitive_attribute": "gender" (optional)}
-    """
     data_id = data.get("data_id")
-    sensitive_attribute = data.get("sensitive_attribute")
-    if not data_id:
-        raise HTTPException(status_code=400, detail="data_id is required")
-
-    if data_id not in DATAFRAMES:
-        raise HTTPException(status_code=404, detail="data_id not found")
-
+    if data_id not in DATAFRAMES: raise HTTPException(status_code=404, detail="Data not found")
     df = DATAFRAMES[data_id]
-    row_count = int(len(df))
-    column_count = int(len(df.columns))
-    numeric_cols = list(df.select_dtypes(include="number").columns)
-    categorical_cols = list(df.select_dtypes(exclude="number").columns)
-
-    null_counts = {col: int(count) for col, count in df.isnull().sum().to_dict().items()}
-    top_numeric_correlations = []
-    if len(numeric_cols) >= 2:
-        corr_matrix = df[numeric_cols].corr(numeric_only=True)
-        corr_pairs = []
-        for i, col_a in enumerate(numeric_cols):
-            for col_b in numeric_cols[i + 1:]:
-                corr_value = corr_matrix.loc[col_a, col_b]
-                if pd.notna(corr_value):
-                    corr_pairs.append(
-                        {
-                            "feature_a": col_a,
-                            "feature_b": col_b,
-                            "correlation": float(corr_value),
-                        }
-                    )
-        top_numeric_correlations = sorted(
-            corr_pairs, key=lambda x: abs(x["correlation"]), reverse=True
-        )[:5]
-
-    dataset_stats: Dict[str, Any] = {
-        "row_count": row_count,
-        "column_count": column_count,
-        "columns": list(df.columns),
-        "numeric_columns": numeric_cols,
-        "categorical_columns": categorical_cols,
-        "null_counts": null_counts,
-        "top_numeric_correlations": top_numeric_correlations,
-    }
-
-    if sensitive_attribute:
-        dataset_stats["sensitive_attribute"] = sensitive_attribute
-
+    dataset_stats = {"row_count": len(df), "column_count": len(df.columns), "columns": list(df.columns)}
     try:
         summary = analyze_hidden_correlations(dataset_stats)
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating agent reasoning: {str(e)}")
-
-    if not isinstance(summary, str) or not summary.strip():
-        summary = build_fallback_agent_summary(dataset_stats)
-
-    red_flags = extract_red_flags(summary)
-
-    return {
-        "summary": summary,
-        "red_flags": red_flags,
-        "status": "complete",
-    }
-
+        return {"summary": summary, "red_flags": extract_red_flags(summary), "status": "complete"}
+    except Exception:
+        return {"summary": build_fallback_agent_summary(dataset_stats), "red_flags": [], "status": "fallback"}
 
 @app.post("/simulate-mitigation")
 async def simulate_mitigation(data: dict):
-    """
-    Simulate a re-weighting mitigation strategy without retraining a model.
-
-    Expected JSON body: {
-        "data_id": "<id>",
-        "target_column": "yhat",
-        "sensitive_column": "gender",
-        "privileged_value": "male" (optional)
-    }
-    """
     data_id = data.get("data_id")
-    target_column = data.get("target_column")
-    sensitive_column = data.get("sensitive_column")
-    privileged_value = data.get("privileged_value")
-
-    if not data_id:
-        raise HTTPException(status_code=400, detail="data_id is required")
-    if not target_column:
-        raise HTTPException(status_code=400, detail="target_column is required")
-    if not sensitive_column:
-        raise HTTPException(status_code=400, detail="sensitive_column is required")
-
-    if data_id not in DATAFRAMES:
-        raise HTTPException(status_code=404, detail="data_id not found")
-
-    df = DATAFRAMES[data_id]
+    if data_id not in DATAFRAMES: raise HTTPException(status_code=404, detail="Data not found")
     try:
-        before_metrics = compute_fairness_metrics(df, target_column, sensitive_column, privileged_value)
-        after_metrics = simulate_reweighting_improvements(before_metrics)
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
-
-    return {
-        "data_id": data_id,
-        "mitigation_strategy": "Re-weighting (simulated)",
-        "is_hypothetical": True,
-        "improvement_range": "20-30%",
-        "before_metrics": before_metrics,
-        "after_metrics": after_metrics,
-    }
-
+        before = compute_fairness_metrics(DATAFRAMES[data_id], data.get("target_column"), data.get("sensitive_column"), data.get("privileged_value"))
+        return {"before_metrics": before, "after_metrics": simulate_reweighting_improvements(before)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/report")
 async def generate_report(data: dict):
-    """
-    Generate a formatted markdown audit report from narrative + chart payloads.
-
-    Expected JSON body:
-    {
-        "title": "Neural Stack Bias Audit Report" (optional),
-        "narrative": "...",
-        "executive_summary": "..." (optional),
-        "charts": {...}
-    }
-    """
-    narrative = data.get("narrative")
-    charts = data.get("charts")
-    title = data.get("title", "Neural Stack Bias Audit Report")
-    executive_summary = data.get("executive_summary", "")
-
-    if not narrative:
-        raise HTTPException(status_code=400, detail="narrative is required")
-    if charts is None:
-        raise HTTPException(status_code=400, detail="charts is required")
-    if not isinstance(charts, dict):
-        raise HTTPException(status_code=400, detail="charts must be a JSON object")
-
-    markdown = format_audit_report_markdown(
-        title=title,
-        narrative=narrative,
-        charts=charts,
-        executive_summary=executive_summary,
-    )
-
+    markdown = format_audit_report_markdown(data.get("title", "Audit Report"), data.get("narrative"), data.get("charts"), data.get("executive_summary", ""))
     return {"report_markdown": markdown}
 
-
-
+# --- CLOUD RUN ENTRY POINT ---
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
+    # Use the PORT environment variable provided by Cloud Run
+    port = int(os.environ.get("PORT", 8080))
+    # host 0.0.0.0 is required to accept outside traffic
+    uvicorn.run(app, host="0.0.0.0", port=port)

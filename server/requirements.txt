@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 pandas
+python-multipart
 numpy
 fairlearn
 google-generativeai
