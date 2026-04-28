@@ -55,3 +55,10 @@ export async function uploadCSV(file) {
     throw error
   }
 }
+
+export async function uploadManual(data) {
+  return fetchAPI('/upload-manual', {
+    method: 'POST',
+    body: JSON.stringify({ data }),
+  })
+}

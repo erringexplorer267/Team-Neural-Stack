@@ -109,6 +109,39 @@ async def upload_csv(file: UploadFile = File(...)):
     }
 
 
+@app.post("/upload-manual")
+async def upload_manual(payload: dict):
+    data = payload.get("data")
+    if not data or not isinstance(data, list):
+        raise HTTPException(status_code=400, detail="Data must be a list of objects")
+
+    try:
+        df = pd.DataFrame(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to create DataFrame: {exc}")
+
+    if df.empty:
+        raise HTTPException(status_code=400, detail="Data is empty")
+
+    # Build response metadata
+    columns = list(df.columns)
+    dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
+
+    keywords = ["race", "gender", "age", "zip", "ethnicity"]
+    potential_sensitive = [col for col in columns if any(k in col.lower() for k in keywords)]
+
+    # store dataframe in global dict with a generated id
+    data_id = str(uuid.uuid4())
+    DATAFRAMES[data_id] = df
+
+    return {
+        "id": data_id,
+        "columns": columns,
+        "dtypes": dtypes,
+        "potential_sensitive_attributes": potential_sensitive,
+    }
+
+
 def simulate_reweighting_improvements(metrics: Dict[str, Any]) -> Dict[str, Any]:
     """
     Build hypothetical (not trained) fairness improvements for a re-weighting simulation.
