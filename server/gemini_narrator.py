@@ -45,16 +45,13 @@ def _get_generate_content_models(preferred_model: str) -> Tuple[List[str], Set[s
     ordered_models: List[str] = []
     seen: Set[str] = set()
 
+    # Keep selection strict to approved text models only.
+    # This avoids accidentally falling through to preview/2.5 variants.
     for candidate in preferred_candidates:
         normalized = _normalize_model_name(candidate)
         if normalized in generate_content_models and normalized not in seen:
             ordered_models.append(normalized)
             seen.add(normalized)
-
-    for model_name in sorted(generate_content_models):
-        if model_name not in seen:
-            ordered_models.append(model_name)
-            seen.add(model_name)
 
     return ordered_models, generate_content_models
 
