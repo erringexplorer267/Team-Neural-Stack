@@ -1,4 +1,4 @@
-export const API_BASE = 'http://127.0.0.1:8000'
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
 export async function fetchAPI(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`
@@ -12,8 +12,17 @@ export async function fetchAPI(endpoint, options = {}) {
       },
     })
     if (!response.ok) {
+      let errorMessage = `API Error: ${response.status} ${response.statusText}`
+      try {
+        const errorData = await response.json()
+        if (errorData?.detail) {
+          errorMessage = `API Error: ${errorData.detail}`
+        }
+      } catch {
+        // Keep default message when body is not JSON.
+      }
       console.error(`[API] Error: ${response.status} ${response.statusText}`)
-      throw new Error(`API Error: ${response.statusText}`)
+      throw new Error(errorMessage)
     }
     const data = await response.json()
     console.log(`[API] Success:`, data)

@@ -6,7 +6,7 @@ import re
 import pandas as pd
 import io
 import uuid
-from fairlearn.metrics import MetricFrame, selection_rate
+from bias_engine import analyze_dataset_comprehensive, compute_fairness_metrics
 from langchain_utils import generate_bias_narrative, analyze_hidden_correlations
 from dotenv import load_dotenv
 
@@ -109,55 +109,6 @@ async def upload_csv(file: UploadFile = File(...)):
     }
 
 
-def compute_fairness_metrics(df: pd.DataFrame, target_column: str, sensitive_column: str, privileged_value: Any = None) -> Dict[str, Any]:
-    if target_column not in df.columns:
-        raise ValueError(f"target_column '{target_column}' not found in dataframe")
-    if sensitive_column not in df.columns:
-        raise ValueError(f"sensitive_column '{sensitive_column}' not found in dataframe")
-
-    # use Fairlearn's selection_rate via MetricFrame
-    y = df[target_column]
-    s = df[sensitive_column]
-
-    mf = MetricFrame(metrics=selection_rate, y_true=y, y_pred=y, sensitive_features=s)
-    selection_rates = mf.by_group.to_dict()
-
-    # choose privileged group: explicit or majority group by count
-    if privileged_value is None:
-        privileged_value = s.value_counts().idxmax()
-
-    if privileged_value not in selection_rates:
-        raise ValueError(f"privileged_value '{privileged_value}' not present in sensitive groups")
-
-    priv_rate = float(selection_rates[privileged_value])
-
-    results: Dict[str, Any] = {
-        "privileged_group": privileged_value,
-        "selection_rates": {str(k): float(v) for k, v in selection_rates.items()},
-        "metrics": {},
-    }
-
-    for group, rate in selection_rates.items():
-        if group == privileged_value:
-            continue
-        unpriv_rate = float(rate)
-        # Statistical Parity Difference = P(Yhat=1|D=unpriv) - P(Yhat=1|D=priv)
-        spd = unpriv_rate - priv_rate
-        # Disparate Impact = P(Yhat=1|D=unpriv) / P(Yhat=1|D=priv)
-        di = None
-        if priv_rate == 0:
-            di = None
-        else:
-            di = unpriv_rate / priv_rate
-
-        results["metrics"][str(group)] = {
-            "disparate_impact": di,
-            "statistical_parity_difference": spd,
-        }
-
-    return results
-
-
 def simulate_reweighting_improvements(metrics: Dict[str, Any]) -> Dict[str, Any]:
     """
     Build hypothetical (not trained) fairness improvements for a re-weighting simulation.
@@ -239,6 +190,28 @@ def extract_red_flags(summary: str) -> list[str]:
     return ["No explicit red flags extracted from LLM response."]
 
 
+def build_fallback_agent_summary(dataset_stats: Dict[str, Any]) -> str:
+    row_count = dataset_stats.get("row_count", 0)
+    column_count = dataset_stats.get("column_count", 0)
+    sensitive_attribute = dataset_stats.get("sensitive_attribute", "selected attribute")
+    null_counts = dataset_stats.get("null_counts", {}) or {}
+    top_nulls = sorted(null_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+    null_summary = ", ".join(f"{col}: {count}" for col, count in top_nulls if count > 0) or "no major null spikes"
+
+    return (
+        "1. Hidden correlations\n"
+        "- LLM summary was unavailable, so this is a deterministic fallback.\n"
+        f"- Dataset scanned: {row_count} rows across {column_count} columns.\n\n"
+        "2. Potential proxy variables\n"
+        f"- Review high-correlation features against '{sensitive_attribute}' for proxy risk.\n\n"
+        "3. Risk level\n"
+        "- Medium: manual verification required because automated reasoning was unavailable.\n\n"
+        "4. Recommended next checks\n"
+        f"- Inspect missingness patterns ({null_summary}).\n"
+        "- Re-run agent reasoning after verifying API key/model quota."
+    )
+
+
 @app.post("/analyze")
 async def analyze(data: dict):
     """Analyze stored dataframe for fairness metrics.
@@ -264,10 +237,13 @@ async def analyze(data: dict):
 
     try:
         metrics = compute_fairness_metrics(df, target_column, sensitive_column, privileged_value)
+        comprehensive_analysis = analyze_dataset_comprehensive(df, sensitive_column, target_column, privileged_value)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to analyze fairness metrics: {str(e)}")
 
-    return {"data_id": data_id, "analysis": metrics}
+    return {"data_id": data_id, "analysis": metrics, "comprehensive_analysis": comprehensive_analysis}
 
 
 @app.post("/narrative")
@@ -387,6 +363,9 @@ async def agent_reasoning(data: dict):
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating agent reasoning: {str(e)}")
+
+    if not isinstance(summary, str) or not summary.strip():
+        summary = build_fallback_agent_summary(dataset_stats)
 
     red_flags = extract_red_flags(summary)
 

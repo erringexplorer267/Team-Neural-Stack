@@ -48,9 +48,14 @@ class SummaryErrorBoundary extends React.Component {
 }
 
 function SummaryContent({ summary, redFlags }) {
-  // Trigger error boundary if summary is empty or only whitespace
-  if (!summary || !summary.trim()) {
-    throw new Error('Empty summary from LLM.')
+  const safeSummary = typeof summary === 'string' ? summary.trim() : ''
+  if (!safeSummary) {
+    return (
+      <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+        <p className="text-sm font-medium text-amber-300">No executive summary available yet.</p>
+        <p className="mt-1 text-xs text-slate-400">Run the investigation again once the LLM response is available.</p>
+      </div>
+    )
   }
 
   // Simple parser to turn LLM markdown-ish text into styled JSX
@@ -109,7 +114,7 @@ function SummaryContent({ summary, redFlags }) {
       <div className="relative rounded-xl border border-slate-800 bg-slate-900/30 p-5 backdrop-blur-sm">
         <div className="absolute -left-[1px] top-4 h-8 w-[2px] bg-cyan-400" />
         <div className="summary-body overflow-hidden">
-          {formatText(summary)}
+          {formatText(safeSummary)}
         </div>
       </div>
 

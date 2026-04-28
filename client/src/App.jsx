@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { AlertCircle, CheckCircle, Loader, Cpu, Radar, ShieldAlert, Activity, UploadCloud } from 'lucide-react'
-import { fetchAPI, uploadCSV } from './api'
+import { API_BASE, fetchAPI, uploadCSV } from './api'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell } from 'recharts'
 import LiveAgentConsole from './components/LiveAgentConsole'
 import ExecutiveSummary from './components/ExecutiveSummary'
 import ReportModal from './components/ReportModal'
 import { prepareReportContext, generateMarkdown } from './utils/reportGenerator'
+import BiasDashboard from './components/BiasDashboard'
 
 export default function App() {
   const [apiStatus, setApiStatus] = useState(null)
@@ -22,6 +23,7 @@ export default function App() {
   const [analyzing, setAnalyzing] = useState(false)
   const [analysisError, setAnalysisError] = useState(null)
   const [selectionRateData, setSelectionRateData] = useState([])
+  const [comprehensiveAnalysis, setComprehensiveAnalysis] = useState(null)
   const [agentLoading, setAgentLoading] = useState(false)
   const [agentError, setAgentError] = useState(null)
   const [thinkingLog, setThinkingLog] = useState([])
@@ -92,6 +94,8 @@ export default function App() {
         }),
       })
       const rates = result?.analysis?.selection_rates || {}
+      const comp = result?.comprehensive_analysis || null
+      setComprehensiveAnalysis(comp)
       const chartData = Object.entries(rates).map(([group, rate]) => ({
         group,
         selectionRate: Number(rate),
@@ -163,19 +167,19 @@ export default function App() {
     setReportError(null)
     
     try {
-      // Gather data for the report
       const contextData = {
         biasScores: selectionRateData,
-        agentSummary: executiveSummary,
+        agentSummary: comprehensiveAnalysis?.explanation || executiveSummary,
         mitigationResults: mitigationResults,
         sensitiveAttribute: selectedSensitiveAttribute,
         targetColumn: targetColumn,
-        datasetId: dataId
+        datasetId: dataId,
+        comprehensiveAnalysis,
       }
 
       const context = prepareReportContext(contextData)
       const markdown = generateMarkdown(context)
-      
+
       setReportMarkdown(markdown)
       setShowReportModal(true)
     } catch (err) {
@@ -326,7 +330,7 @@ export default function App() {
                 <p>React: {React.version}</p>
                 <p>Vite: Ready</p>
                 <p>Tailwind: Global Theme Active</p>
-                <p className="text-cyan-400">API_BASE: http://127.0.0.1:8000</p>
+                <p className="text-cyan-400">API_BASE: {API_BASE}</p>
                 {apiStatus && <p className="text-cyan-300">Backend: Connected</p>}
                 {error && <p className="text-rose-400">Backend: Error</p>}
               </div>
@@ -454,6 +458,8 @@ export default function App() {
                         border: '1px solid #22d3ee55',
                         color: '#e2e8f0',
                       }}
+                      labelStyle={{ color: '#e2e8f0' }}
+                      itemStyle={{ color: '#e2e8f0' }}
                     />
                     <ReferenceLine
                       y={0.8}
